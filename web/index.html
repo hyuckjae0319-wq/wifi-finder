@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="전국 공공 와이파이 위치를 카카오맵에서 확인하세요. 83,000개 이상의 무료 WiFi 스팟을 검색하고 찾아보세요.">
+    <title>WiFi Finder – 전국 무료 와이파이 지도</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Leaflet & MarkerCluster (Open Source Map) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- ========== HEADER ========== -->
+    <header id="app-header">
+        <div class="header-left">
+            <div class="logo" id="logo-btn">
+                <span class="logo-icon">📡</span>
+                <span class="logo-text">WiFi Finder</span>
+            </div>
+        </div>
+        <div class="header-center">
+            <div class="search-wrapper" id="search-wrapper">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                </svg>
+                <input type="text" id="search-input" placeholder="장소, 주소, SSID로 검색..." autocomplete="off">
+                <button id="search-clear" class="search-clear" aria-label="검색 초기화">&times;</button>
+            </div>
+        </div>
+        <div class="header-right">
+            <button id="btn-my-location" class="header-btn" title="내 위치">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+            </button>
+            <button id="btn-stats" class="header-btn" title="통계">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- ========== FILTER BAR ========== -->
+    <div id="filter-bar">
+        <div class="filter-scroll">
+            <button class="filter-chip active" data-filter="all">
+                <span class="chip-icon">🌐</span> 전체
+            </button>
+            <button class="filter-chip" data-filter="교통시설">
+                <span class="chip-icon">🚌</span> 교통시설
+            </button>
+            <button class="filter-chip" data-filter="관공서">
+                <span class="chip-icon">🏛️</span> 관공서
+            </button>
+            <button class="filter-chip" data-filter="서민·복지시설">
+                <span class="chip-icon">🏠</span> 복지시설
+            </button>
+            <button class="filter-chip" data-filter="관광">
+                <span class="chip-icon">🏖️</span> 관광
+            </button>
+            <button class="filter-chip" data-filter="지역문화시설">
+                <span class="chip-icon">🎭</span> 문화시설
+            </button>
+            <button class="filter-chip" data-filter="편의시설">
+                <span class="chip-icon">🏪</span> 편의시설
+            </button>
+            <button class="filter-chip" data-filter="교육시설">
+                <span class="chip-icon">🎓</span> 교육시설
+            </button>
+            <button class="filter-chip" data-filter="기타">
+                <span class="chip-icon">📌</span> 기타
+            </button>
+        </div>
+    </div>
+
+    <!-- ========== MAP ========== -->
+    <div id="map-container">
+        <div id="map"></div>
+
+        <!-- Loading overlay -->
+        <div id="loading-overlay">
+            <div class="loading-content">
+                <div class="loading-spinner"></div>
+                <p class="loading-text">와이파이 데이터 로딩 중...</p>
+                <p class="loading-sub" id="loading-progress">83,000+ 스팟 준비 중</p>
+            </div>
+        </div>
+
+        <!-- Map info badge -->
+        <div id="map-info-badge">
+            <span id="visible-count">0</span>개 표시 중
+        </div>
+    </div>
+
+    <!-- ========== DETAIL PANEL (Slide-up) ========== -->
+    <div id="detail-panel" class="panel-hidden">
+        <div class="panel-handle"></div>
+        <div class="panel-content">
+            <div class="panel-header">
+                <div class="panel-icon" id="panel-icon">📡</div>
+                <div class="panel-title-area">
+                    <h2 id="panel-name">-</h2>
+                    <p id="panel-facility" class="panel-subtitle">-</p>
+                </div>
+                <button id="panel-close" class="panel-close-btn" aria-label="닫기">&times;</button>
+            </div>
+            <div class="panel-body">
+                <div class="info-row">
+                    <span class="info-label">📶 SSID</span>
+                    <span class="info-value" id="panel-ssid">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">📍 주소</span>
+                    <span class="info-value" id="panel-address">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">🏙️ 지역</span>
+                    <span class="info-value" id="panel-region">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">📝 상세</span>
+                    <span class="info-value" id="panel-detail">-</span>
+                </div>
+                <div class="panel-actions">
+                    <button id="btn-navi" class="action-btn primary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>
+                        길찾기
+                    </button>
+                    <button id="btn-share" class="action-btn secondary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                        공유
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== STATS MODAL ========== -->
+    <div id="stats-modal" class="modal-hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📊 전국 WiFi 통계</h2>
+                <button id="stats-close" class="panel-close-btn">&times;</button>
+            </div>
+            <div class="modal-body" id="stats-body">
+                <!-- filled by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== SEARCH RESULTS ========== -->
+    <div id="search-results" class="results-hidden">
+        <ul id="search-list"></ul>
+    </div>
+
+    <!-- WiFi 데이터 (전역 변수 WIFI_DATA) -->
+    <script src="data/wifi-data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
