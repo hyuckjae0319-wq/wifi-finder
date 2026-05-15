@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="전국 공공 와이파이 위치를 카카오맵에서 확인하세요. 83,000개 이상의 무료 WiFi 스팟을 검색하고 찾아보세요.">
+    <meta name="description" content="전세계 무료 와이파이 위치를 지도에서 확인하세요. 한국 공공 와이파이 83,000개와 전세계 OpenStreetMap 데이터를 실시간으로 탐색합니다.">
     <title>WiFi Finder – 전국 무료 와이파이 지도</title>
 
     <!-- Google Fonts -->
@@ -54,29 +54,23 @@
             <button class="filter-chip active" data-filter="all">
                 <span class="chip-icon">🌐</span> 전체
             </button>
+            <button class="filter-chip" data-filter="korea">
+                <span class="chip-icon">🇰🇷</span> 한국 공공
+            </button>
+            <button class="filter-chip" data-filter="global">
+                <span class="chip-icon">🌍</span> 글로벌 OSM
+            </button>
+            <button class="filter-chip" data-filter="관공서">
+                <span class="chip-icon">🏛️</span> 관공서/공공
+            </button>
+            <button class="filter-chip" data-filter="카페">
+                <span class="chip-icon">☕</span> 카페/식당
+            </button>
             <button class="filter-chip" data-filter="교통시설">
                 <span class="chip-icon">🚌</span> 교통시설
             </button>
-            <button class="filter-chip" data-filter="관공서">
-                <span class="chip-icon">🏛️</span> 관공서
-            </button>
-            <button class="filter-chip" data-filter="서민·복지시설">
-                <span class="chip-icon">🏠</span> 복지시설
-            </button>
-            <button class="filter-chip" data-filter="관광">
-                <span class="chip-icon">🏖️</span> 관광
-            </button>
-            <button class="filter-chip" data-filter="지역문화시설">
-                <span class="chip-icon">🎭</span> 문화시설
-            </button>
-            <button class="filter-chip" data-filter="편의시설">
-                <span class="chip-icon">🏪</span> 편의시설
-            </button>
-            <button class="filter-chip" data-filter="교육시설">
-                <span class="chip-icon">🎓</span> 교육시설
-            </button>
-            <button class="filter-chip" data-filter="기타">
-                <span class="chip-icon">📌</span> 기타
+            <button class="filter-chip" data-filter="숙박">
+                <span class="chip-icon">🏨</span> 숙박
             </button>
         </div>
     </div>
@@ -85,13 +79,24 @@
     <div id="map-container">
         <div id="map"></div>
 
-        <!-- Loading overlay -->
+        <!-- Loading overlay (Initial) -->
         <div id="loading-overlay">
             <div class="loading-content">
                 <div class="loading-spinner"></div>
-                <p class="loading-text">와이파이 데이터 로딩 중...</p>
-                <p class="loading-sub" id="loading-progress">83,000+ 스팟 준비 중</p>
+                <p class="loading-text">전세계 와이파이 지도 로딩 중...</p>
+                <p class="loading-sub" id="loading-progress">초기화 중</p>
             </div>
+        </div>
+
+        <!-- API Loading Indicator (Top Center) -->
+        <div id="api-loading" class="api-loading-hidden">
+            <div class="api-spinner"></div>
+            <span>해외 와이파이 탐색 중...</span>
+        </div>
+
+        <!-- Zoom Prompt (Top Center) -->
+        <div id="zoom-prompt" class="zoom-prompt-hidden">
+            <span>📡 확대하면 주변 WiFi가 표시됩니다</span>
         </div>
 
         <!-- Map info badge -->

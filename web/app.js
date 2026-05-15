@@ -1,23 +1,31 @@
 /* ================================================================
-   WiFi Finder – Main Application Logic (Leaflet.js Version)
-   오픈소스 지도(Leaflet.js) + 마커 클러스터러 + Viewport 최적화
+   WiFi Finder – Global Expansion (Hybrid Lazy Loading)
+   한국 정적 데이터(83k) + OSM Overpass API 글로벌 데이터
    ================================================================ */
 
 (function () {
     'use strict';
 
     // ── State ──
-    let allData = [];           // 전체 WiFi 데이터
+    let koreaData = [];         // 한국 공공 와이파이 데이터 (정적)
+    let osmData = [];           // 해외/글로벌 와이파이 데이터 (동적)
     let map = null;             // Leaflet 맵 인스턴스
     let clusterer = null;       // Leaflet 마커 클러스터 그룹
     let activeFilter = 'all';   // 현재 필터
     let debounceTimer = null;
     let myLocationMarker = null;// 내 위치 표시 마커
+    
+    let isFetching = false;
+    const loadedTiles = new Set(); // 타일 캐시 추적용
+
+    // ── 상수 ──
+    const KOREA_BOUNDS = { south: 32.0, north: 39.0, west: 124.0, east: 132.0 };
+    const MIN_OSM_ZOOM = 13; // 이 줌 레벨 이상일 때만 OSM API 호출
 
     // ── DOM 참조 ──
-    const $map = document.getElementById('map');
     const $loading = document.getElementById('loading-overlay');
-    const $loadingProgress = document.getElementById('loading-progress');
+    const $apiLoading = document.getElementById('api-loading');
+    const $zoomPrompt = document.getElementById('zoom-prompt');
     const $visibleCount = document.getElementById('visible-count');
     const $searchInput = document.getElementById('search-input');
     const $searchClear = document.getElementById('search-clear');
@@ -35,7 +43,6 @@
     const $panelDetail = document.getElementById('panel-detail');
     const $panelIcon = document.getElementById('panel-icon');
 
-    // ── Facility → Emoji map ──
     const facilityIcons = {
         '교통시설': '🚌',
         '관공서': '🏛️',
@@ -44,6 +51,8 @@
         '지역문화시설': '🎭',
         '편의시설': '🏪',
         '교육시설': '🎓',
+        '카페': '☕',
+        '숙박': '🏨',
         '기타': '📌'
     };
 
@@ -60,60 +69,54 @@
             initMap();
             initClusterer();
             bindEvents();
-            renderMarkers();
-            hideLoading();
+            
+            // 초기 로딩 지연 (UI 부드럽게)
+            setTimeout(() => {
+                hideLoading();
+                debouncedRender();
+            }, 500);
         } catch (err) {
             console.error('Init failed:', err);
             $loading.style.display = 'flex';
             $loading.style.opacity = '1';
             $loading.classList.remove('fade-out');
             document.querySelector('.loading-spinner').style.display = 'none';
-            $loadingProgress.style.color = '#ef4444';
-            $loadingProgress.innerHTML = `
-                <b>[오류 발생] 지도를 불러올 수 없습니다.</b><br><br>
+            document.getElementById('loading-progress').innerHTML = `
+                <b style="color:#ef4444">[오류 발생] 지도를 불러올 수 없습니다.</b><br><br>
                 ${err.message.replace(/\n/g, '<br>')}
             `;
         }
     }
 
-    // ── 데이터 로드 (전역 변수 WIFI_DATA에서 직접 참조 — 서버 불필요) ──
+    // ── 데이터 로드 (한국 정적 데이터) ──
     function loadData() {
-        if (typeof WIFI_DATA === 'undefined' || !Array.isArray(WIFI_DATA)) {
-            throw new Error('WIFI_DATA가 로드되지 않았습니다. wifi-data.js 파일을 확인하세요.');
+        if (typeof WIFI_DATA !== 'undefined' && Array.isArray(WIFI_DATA)) {
+            // Add isKorea flag for easy filtering later
+            koreaData = WIFI_DATA.map(d => ({ ...d, isKorea: true }));
+            console.log(`✅ 한국 WiFi 데이터 로드: ${koreaData.length.toLocaleString()}건`);
+        } else {
+            console.warn('⚠️ WIFI_DATA가 로드되지 않았습니다.');
         }
-        allData = WIFI_DATA;
-        $loadingProgress.textContent = `${allData.length.toLocaleString()}개 스팟 로드 완료`;
-        console.log(`✅ WiFi 데이터 로드: ${allData.length.toLocaleString()}건`);
     }
 
     // ── 지도 초기화 (Leaflet) ──
     function initMap() {
-        // 한국 중심 좌표 (위도, 경도) 및 경계 설정
-        const koreaBounds = [
-            [32.0, 124.0], // 남서쪽 (South West)
-            [39.0, 132.0]  // 북동쪽 (North East)
-        ];
-
         map = L.map('map', {
-            center: [36.5, 127.8],
-            zoom: 7, // Leaflet 줌은 숫자가 클수록 확대됨
-            minZoom: 6, // 대한민국 전체가 보이는 수준 이하로 축소 방지
-            maxBounds: koreaBounds, // 지도 이동 범위를 한국으로 제한
-            maxBoundsViscosity: 1.0, // 경계 밖으로 튕겨나가지 않도록 강력하게 고정
+            center: [20.0, 0.0], // 전세계 뷰 초기화 (적도 부근)
+            zoom: 3,
+            minZoom: 2,
             zoomControl: false // 오른쪽 아래로 옮기기 위해 기본 컨트롤 비활성
         });
 
-        // 우측 하단 줌 컨트롤
         L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-        // OpenStreetMap 타일 레이어 추가
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         }).addTo(map);
     }
 
-    // ── 클러스터러 초기화 (Leaflet.markercluster) ──
+    // ── 클러스터러 초기화 ──
     function initClusterer() {
         clusterer = L.markerClusterGroup({
             maxClusterRadius: 80,
@@ -124,95 +127,233 @@
             iconCreateFunction: function(cluster) {
                 const count = cluster.getChildCount();
                 let c = ' cluster-small';
-                if (count > 1000) {
-                    c = ' cluster-huge';
-                } else if (count > 200) {
-                    c = ' cluster-large';
-                } else if (count > 50) {
-                    c = ' cluster-medium';
-                }
+                if (count > 1000) c = ' cluster-huge';
+                else if (count > 200) c = ' cluster-large';
+                else if (count > 50) c = ' cluster-medium';
 
                 return new L.DivIcon({
                     html: `<div><span>${count}</span></div>`,
                     className: 'custom-cluster-icon' + c,
-                    iconSize: L.point(40, 40) // 사이즈는 CSS에서 덮어씀
+                    iconSize: L.point(40, 40)
                 });
             }
         });
         map.addLayer(clusterer);
     }
 
-    // ── 마커 렌더링 ──
-    function renderMarkers() {
-        // 기존 마커 & 오버레이 정리
-        clusterer.clearLayers();
+    // ================================================================
+    //  HYBRID RENDER & FETCH LOGIC
+    // ================================================================
+    
+    function isCenterInKorea(center) {
+        return center.lat >= KOREA_BOUNDS.south && center.lat <= KOREA_BOUNDS.north &&
+               center.lng >= KOREA_BOUNDS.west && center.lng <= KOREA_BOUNDS.east;
+    }
 
-        // 필터링
-        const filtered = activeFilter === 'all'
-            ? allData
-            : allData.filter(d => d.f === activeFilter);
-
-        // 뷰포트 기반 렌더링 (줌 레벨에 따라)
-        // Leaflet에서는 줌 레벨이 클수록 확대됨. 12 이상일 때 화면 내 데이터만
+    async function handleViewportChange() {
         const zoom = map.getZoom();
-        let dataToRender;
-
-        if (zoom >= 13) {
-            // 확대 상태: 현재 화면 영역 내 데이터만 필터링
-            const bounds = map.getBounds();
-            dataToRender = filtered.filter(d => bounds.contains([d.lt, d.ln]));
+        const center = map.getCenter();
+        const inKorea = isCenterInKorea(center);
+        
+        // 1. Zoom Prompt UI 제어
+        if (zoom < MIN_OSM_ZOOM && !inKorea) {
+            $zoomPrompt.classList.remove('zoom-prompt-hidden');
         } else {
-            // 축소 상태: 전체 (클러스터러가 처리)
-            dataToRender = filtered;
+            $zoomPrompt.classList.add('zoom-prompt-hidden');
         }
 
-        // Leaflet 마커 생성 배열
-        const markersArray = [];
+        // 2. OSM 데이터 페칭 (해외이거나, 줌이 높을 때)
+        if (zoom >= MIN_OSM_ZOOM) {
+            await fetchTilesInView();
+        }
 
-        // 기본 아이콘 설정 (파란색 점)
-        const customIcon = L.divIcon({
+        // 3. 마커 렌더링
+        renderMarkers();
+    }
+
+    // 현재 화면에 보이는 지도 타일들을 계산하고 안 불러온 타일 데이터를 OSM에서 가져옴
+    async function fetchTilesInView() {
+        if (isFetching) return;
+        
+        const bounds = map.getBounds();
+        const zoom = MIN_OSM_ZOOM; // 타일 캐싱 기준 줌 레벨 (13)
+        
+        // 화면에 보이는 타일 좌표 계산
+        const getTile = (lat, lng, z) => {
+            const n = Math.pow(2, z);
+            const x = Math.floor((lng + 180) / 360 * n);
+            const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI/180) + 1/Math.cos(lat * Math.PI/180)) / Math.PI) / 2 * n);
+            return {x, y, z};
+        };
+
+        const nw = getTile(bounds.getNorthWest().lat, bounds.getNorthWest().lng, zoom);
+        const se = getTile(bounds.getSouthEast().lat, bounds.getSouthEast().lng, zoom);
+        
+        // 요청할 bounding box 구하기 (합쳐서 한 번에 쿼리)
+        const fetchBounds = {
+            north: -90, south: 90, west: 180, east: -180
+        };
+        let needsFetch = false;
+        
+        for (let x = nw.x; x <= se.x; x++) {
+            for (let y = nw.y; y <= se.y; y++) {
+                const tileKey = `${zoom}-${x}-${y}`;
+                if (!loadedTiles.has(tileKey)) {
+                    loadedTiles.add(tileKey);
+                    needsFetch = true;
+                    // 타일 범위를 LatLng로 변환
+                    const n = Math.PI - 2 * Math.PI * y / Math.pow(2, zoom);
+                    const s = Math.PI - 2 * Math.PI * (y+1) / Math.pow(2, zoom);
+                    const tileNorth = 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+                    const tileSouth = 180 / Math.PI * Math.atan(0.5 * (Math.exp(s) - Math.exp(-s)));
+                    const tileWest = x / Math.pow(2, zoom) * 360 - 180;
+                    const tileEast = (x+1) / Math.pow(2, zoom) * 360 - 180;
+                    
+                    fetchBounds.north = Math.max(fetchBounds.north, tileNorth);
+                    fetchBounds.south = Math.min(fetchBounds.south, tileSouth);
+                    fetchBounds.west = Math.min(fetchBounds.west, tileWest);
+                    fetchBounds.east = Math.max(fetchBounds.east, tileEast);
+                }
+            }
+        }
+
+        if (!needsFetch) return;
+
+        isFetching = true;
+        $apiLoading.classList.remove('api-loading-hidden');
+
+        try {
+            // 여유 마진 추가
+            const qBbox = `${fetchBounds.south},${fetchBounds.west},${fetchBounds.north},${fetchBounds.east}`;
+            const query = `[out:json][timeout:25];nwr["internet_access"="wlan"]["internet_access:fee"="no"](${qBbox});out center;`;
+            const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+            
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("API Limit");
+            const data = await res.json();
+            
+            if (data && data.elements) {
+                const newData = data.elements.map(el => {
+                    const tags = el.tags || {};
+                    return {
+                        id: el.id,
+                        isKorea: false,
+                        lt: el.center ? el.center.lat : el.lat,
+                        ln: el.center ? el.center.lon : el.lon,
+                        n: tags.name || tags.operator || '(이름 없음)',
+                        s: tags.ssid || '',
+                        a: `${tags['addr:street'] || ''} ${tags['addr:housenumber'] || ''}`.trim(),
+                        f: mapOSMTagsToFacility(tags),
+                        d: `오픈스트리트맵 정보 (Node ${el.id})`
+                    };
+                });
+                
+                // 기존 데이터와 병합 (ID 중복 제거)
+                const existingIds = new Set(osmData.map(d => d.id));
+                const uniqueNewData = newData.filter(d => !existingIds.has(d.id));
+                osmData = [...osmData, ...uniqueNewData];
+            }
+        } catch (err) {
+            console.error("OSM API Fetch Error:", err);
+            // 에러 나면 캐시에서 지워서 다음번에 다시 시도하게 함
+            // (실제 앱에서는 너무 잦은 시도를 막기 위해 로직이 더 필요할 수 있음)
+        } finally {
+            isFetching = false;
+            $apiLoading.classList.add('api-loading-hidden');
+            renderMarkers(); // 새로 받은 데이터 표시
+        }
+    }
+
+    // OSM 태그를 앱의 시설 분류로 매핑
+    function mapOSMTagsToFacility(tags) {
+        const am = tags.amenity;
+        const to = tags.tourism;
+        if (am === 'cafe' || am === 'restaurant' || am === 'fast_food') return '카페';
+        if (am === 'townhall' || am === 'public_building' || am === 'library') return '관공서';
+        if (am === 'bus_station' || tags.public_transport === 'station') return '교통시설';
+        if (to === 'hotel' || to === 'hostel' || to === 'guest_house') return '숙박';
+        if (to === 'museum' || to === 'gallery') return '지역문화시설';
+        if (am === 'university' || am === 'school') return '교육시설';
+        return '기타';
+    }
+
+    // ── 마커 렌더링 ──
+    function renderMarkers() {
+        clusterer.clearLayers();
+
+        const zoom = map.getZoom();
+        const bounds = map.getBounds();
+        
+        let targetData = [];
+        
+        // 1. 한국 데이터 필터링
+        // 한국 데이터는 많기 때문에, 줌이 너무 낮으면(zoom<7) 필터링 없이 클러스터러에 맡김
+        // 줌이 7 이상이면 화면 안의 데이터만 필터링해서 성능 최적화
+        let kData = koreaData;
+        if (zoom >= 7) {
+            kData = kData.filter(d => bounds.contains([d.lt, d.ln]));
+        } else if (!isCenterInKorea(map.getCenter())) {
+            // 전세계 뷰에서 멀리 떨어져있을때 한국 데이터를 전부 렌더링하면 무거움
+            kData = []; 
+        }
+
+        // 2. OSM 데이터 필터링 (항상 화면 안의 데이터만)
+        let oData = osmData.filter(d => bounds.contains([d.lt, d.ln]));
+
+        targetData = [...kData, ...oData];
+
+        // 3. 사용자 필터링 (카테고리)
+        if (activeFilter !== 'all') {
+            if (activeFilter === 'korea') {
+                targetData = targetData.filter(d => d.isKorea);
+            } else if (activeFilter === 'global') {
+                targetData = targetData.filter(d => !d.isKorea);
+            } else {
+                targetData = targetData.filter(d => d.f === activeFilter);
+            }
+        }
+
+        // 마커 아이콘 설정
+        const koreaIcon = L.divIcon({
             className: 'custom-pin',
             html: '<div class="pin-inner"></div>',
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
+            iconSize: [24, 24], iconAnchor: [12, 12]
+        });
+        const globalIcon = L.divIcon({
+            className: 'global-pin',
+            html: '<div class="pin-inner"></div>',
+            iconSize: [24, 24], iconAnchor: [12, 12]
         });
 
-        dataToRender.forEach(d => {
-            const marker = L.marker([d.lt, d.ln], { icon: customIcon });
+        const markersArray = [];
 
-            // 팝업 내용
+        targetData.forEach(d => {
+            if (!d.lt || !d.ln) return;
+            const icon = d.isKorea ? koreaIcon : globalIcon;
+            const marker = L.marker([d.lt, d.ln], { icon });
+
             const popupContent = `
                 <div class="custom-overlay">
                     <div class="ov-name">${escapeHtml(d.n)}</div>
                     <div class="ov-ssid">📶 ${escapeHtml(d.s || '(SSID 없음)')}</div>
-                    <div class="ov-addr">${escapeHtml(d.a || d.c + ' ' + d.g)}</div>
+                    <div class="ov-addr">${escapeHtml(d.a || (d.c ? d.c + ' ' + (d.g||'') : ''))}</div>
                 </div>
             `;
             marker.bindPopup(popupContent, {
-                offset: [0, -10],
-                closeButton: false,
-                className: 'custom-popup-wrapper'
+                offset: [0, -10], closeButton: false, className: 'custom-popup-wrapper'
             });
 
-            // 클릭 이벤트 (패널 표시)
-            marker.on('click', () => {
-                showDetailPanel(d);
-            });
-
+            marker.on('click', () => showDetailPanel(d));
             markersArray.push(marker);
         });
 
-        // 클러스터러에 일괄 추가 (성능 최적화)
         clusterer.addLayers(markersArray);
-
-        // 표시 수 업데이트
-        $visibleCount.textContent = dataToRender.length.toLocaleString();
+        $visibleCount.textContent = targetData.length.toLocaleString();
     }
 
-    // ── 디바운스 렌더 ──
     function debouncedRender() {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(renderMarkers, 300);
+        debounceTimer = setTimeout(handleViewportChange, 300);
     }
 
     // ── 상세 패널 ──
@@ -221,26 +362,22 @@
         $panelFacility.textContent = data.f || '기타';
         $panelSsid.textContent = data.s || '(SSID 정보 없음)';
         $panelAddress.textContent = data.a || '(주소 정보 없음)';
-        $panelRegion.textContent = `${data.c} ${data.g}`;
+        $panelRegion.textContent = data.c ? `${data.c} ${data.g||''}` : (data.isKorea ? '대한민국' : 'Global (OSM)');
         $panelDetail.textContent = data.d || '-';
-        $panelIcon.textContent = facilityIcons[data.f] || '📡';
+        $panelIcon.textContent = facilityIcons[data.f] || (data.isKorea ? '📡' : '🌍');
         $detailPanel.classList.remove('panel-hidden');
 
-        // 길찾기 버튼 – 구글맵 길찾기 연결 (카카오 대신)
         document.getElementById('btn-navi').onclick = () => {
             const url = `https://www.google.com/maps/dir/?api=1&destination=${data.lt},${data.ln}`;
             window.open(url, '_blank');
         };
 
-        // 공유 버튼
         document.getElementById('btn-share').onclick = () => {
-            const text = `📡 ${data.n}\n📶 ${data.s}\n📍 ${data.a || data.c + ' ' + data.g}`;
+            const text = `📡 ${data.n}\n📶 ${data.s || 'N/A'}\n📍 ${data.a || ''}`;
             if (navigator.share) {
                 navigator.share({ title: 'WiFi Finder', text: text });
             } else {
-                navigator.clipboard.writeText(text).then(() => {
-                    alert('클립보드에 복사되었습니다!');
-                });
+                navigator.clipboard.writeText(text).then(() => alert('클립보드에 복사되었습니다!'));
             }
         };
     }
@@ -249,14 +386,13 @@
         $detailPanel.classList.add('panel-hidden');
     }
 
-    // ── 로딩 숨김 ──
     function hideLoading() {
         $loading.classList.add('fade-out');
         setTimeout(() => { $loading.style.display = 'none'; }, 600);
     }
 
     // ================================================================
-    //  SEARCH
+    //  SEARCH (검색은 로드된 데이터 안에서만)
     // ================================================================
     function handleSearch(query) {
         if (!query || query.length < 2) {
@@ -267,9 +403,11 @@
         const q = query.toLowerCase();
         const results = [];
         const limit = 20;
+        
+        const combinedData = [...koreaData, ...osmData];
 
-        for (let i = 0; i < allData.length && results.length < limit; i++) {
-            const d = allData[i];
+        for (let i = 0; i < combinedData.length && results.length < limit; i++) {
+            const d = combinedData[i];
             if (
                 (d.n && d.n.toLowerCase().includes(q)) ||
                 (d.a && d.a.toLowerCase().includes(q)) ||
@@ -286,7 +424,7 @@
             $searchList.innerHTML = results.map(d => `
                 <li data-lat="${d.lt}" data-lng="${d.ln}">
                     <div class="result-name">${highlightMatch(d.n, q)}</div>
-                    <div class="result-sub">${escapeHtml(d.a || d.c + ' ' + d.g)}</div>
+                    <div class="result-sub">${escapeHtml(d.a || (d.c ? d.c + ' ' + (d.g||'') : ''))}</div>
                     ${d.s ? `<div class="result-ssid">📶 ${highlightMatch(d.s, q)}</div>` : ''}
                 </li>
             `).join('');
@@ -306,58 +444,25 @@
     //  STATS
     // ================================================================
     function showStats() {
-        const cityMap = {};
-        const facilityMap = {};
-
-        allData.forEach(d => {
-            cityMap[d.c] = (cityMap[d.c] || 0) + 1;
-            facilityMap[d.f || '기타'] = (facilityMap[d.f || '기타'] || 0) + 1;
-        });
-
-        const citySorted = Object.entries(cityMap).sort((a, b) => b[1] - a[1]);
-        const facilitySorted = Object.entries(facilityMap).sort((a, b) => b[1] - a[1]);
-        const maxCity = citySorted[0][1];
-        const maxFacility = facilitySorted[0][1];
-
+        const total = koreaData.length + osmData.length;
+        
         document.getElementById('stats-body').innerHTML = `
             <div class="stats-grid">
                 <div class="stat-card">
-                    <div class="stat-number">${allData.length.toLocaleString()}</div>
-                    <div class="stat-label">전체 WiFi 스팟</div>
+                    <div class="stat-number">${koreaData.length.toLocaleString()}</div>
+                    <div class="stat-label">한국 공공 WiFi</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-number">${citySorted.length}</div>
-                    <div class="stat-label">시·도 지역</div>
+                    <div class="stat-number" style="color: var(--accent-green);">${osmData.length.toLocaleString()}</div>
+                    <div class="stat-label">글로벌 WiFi (현재 로드됨)</div>
                 </div>
             </div>
-
-            <p class="stats-section-title">🏙️ 시·도별 분포</p>
-            <div class="stats-bar-list">
-                ${citySorted.map(([name, count]) => `
-                    <div class="stats-bar-item">
-                        <span class="stats-bar-name">${escapeHtml(name)}</span>
-                        <div class="stats-bar-track">
-                            <div class="stats-bar-fill" style="width:${(count / maxCity * 100).toFixed(1)}%"></div>
-                        </div>
-                        <span class="stats-bar-count">${count.toLocaleString()}</span>
-                    </div>
-                `).join('')}
-            </div>
-
-            <p class="stats-section-title">🏢 시설 유형별 분포</p>
-            <div class="stats-bar-list">
-                ${facilitySorted.map(([name, count]) => `
-                    <div class="stats-bar-item">
-                        <span class="stats-bar-name">${facilityIcons[name] || '📌'} ${escapeHtml(name)}</span>
-                        <div class="stats-bar-track">
-                            <div class="stats-bar-fill" style="width:${(count / maxFacility * 100).toFixed(1)}%"></div>
-                        </div>
-                        <span class="stats-bar-count">${count.toLocaleString()}</span>
-                    </div>
-                `).join('')}
-            </div>
+            <p class="stats-section-title">⚠️ 글로벌 데이터 안내</p>
+            <p style="font-size:13px; color:var(--text-secondary); line-height:1.5;">
+                해외 데이터는 사용자가 지도를 확대(Zoom)할 때 OpenStreetMap 서버에서 실시간으로 불러옵니다.<br><br>
+                따라서 전체 통계에는 현재 화면에 로드된 해외 데이터의 개수만 반영됩니다.
+            </p>
         `;
-
         $statsModal.classList.remove('modal-hidden');
     }
 
@@ -365,10 +470,8 @@
     //  EVENT BINDING
     // ================================================================
     function bindEvents() {
-        // 지도 이벤트 (뷰포트 변경 시 마커 갱신)
         map.on('moveend', debouncedRender);
 
-        // 필터 칩
         document.querySelectorAll('.filter-chip').forEach(chip => {
             chip.addEventListener('click', () => {
                 document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
@@ -378,7 +481,6 @@
             });
         });
 
-        // 검색
         $searchInput.addEventListener('input', () => {
             const val = $searchInput.value.trim();
             $searchClear.classList.toggle('visible', val.length > 0);
@@ -392,7 +494,6 @@
             $searchResults.classList.add('results-hidden');
         });
 
-        // 검색 결과 클릭
         $searchList.addEventListener('click', (e) => {
             const li = e.target.closest('li');
             if (!li) return;
@@ -403,49 +504,30 @@
             map.setView([lat, lng], 16);
             $searchResults.classList.add('results-hidden');
             $searchInput.blur();
-
-            // 해당 데이터 찾아서 패널 표시
-            const d = allData.find(item => item.lt === lat && item.ln === lng);
-            if (d) {
-                showDetailPanel(d);
-                // 팝업 표시를 위해 강제 렌더링 호출
-                debouncedRender();
-            }
+            debouncedRender();
         });
 
-        // 외부 클릭 시 검색결과 닫기
         document.addEventListener('click', (e) => {
             if (!e.target.closest('#search-wrapper') && !e.target.closest('#search-results')) {
                 $searchResults.classList.add('results-hidden');
             }
         });
 
-        // 패널 닫기
         document.getElementById('panel-close').addEventListener('click', hideDetailPanel);
-
-        // 내 위치
         document.getElementById('btn-my-location').addEventListener('click', goToMyLocation);
-
-        // 통계
+        
         document.getElementById('btn-stats').addEventListener('click', showStats);
-        document.getElementById('stats-close').addEventListener('click', () => {
-            $statsModal.classList.add('modal-hidden');
-        });
-        document.querySelector('.modal-backdrop').addEventListener('click', () => {
-            $statsModal.classList.add('modal-hidden');
-        });
+        document.getElementById('stats-close').addEventListener('click', () => $statsModal.classList.add('modal-hidden'));
+        document.querySelector('.modal-backdrop').addEventListener('click', () => $statsModal.classList.add('modal-hidden'));
 
-        // 로고 클릭 → 전국 보기
         document.getElementById('logo-btn').addEventListener('click', () => {
-            map.setView([36.5, 127.8], 7);
+            map.setView([20.0, 0.0], 3);
             hideDetailPanel();
         });
 
-        // 지도 클릭 시 패널 닫기
         map.on('click', hideDetailPanel);
     }
 
-    // ── 내 위치 ──
     function goToMyLocation() {
         if (!navigator.geolocation) {
             alert('이 브라우저에서는 위치 서비스를 지원하지 않습니다.');
@@ -457,44 +539,30 @@
                 const lng = pos.coords.longitude;
                 map.setView([lat, lng], 15);
 
-                // 파란색 깜빡이는 내 위치 마커 추가/업데이트
                 const locationIcon = L.divIcon({
                     className: 'my-location-dot',
                     html: '',
-                    iconSize: [16, 16],
-                    iconAnchor: [8, 8]
+                    iconSize: [16, 16], iconAnchor: [8, 8]
                 });
 
                 if (myLocationMarker) {
                     myLocationMarker.setLatLng([lat, lng]);
                 } else {
-                    myLocationMarker = L.marker([lat, lng], {
-                        icon: locationIcon,
-                        zIndexOffset: 1000 // 다른 마커들 위에 표시
-                    }).addTo(map);
+                    myLocationMarker = L.marker([lat, lng], { icon: locationIcon, zIndexOffset: 1000 }).addTo(map);
                 }
             },
-            (err) => {
-                alert('위치 정보를 가져올 수 없습니다.\\n(브라우저의 위치 정보 제공 권한을 허용했는지 확인해주세요)\\n에러: ' + err.message);
-            },
-            {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 0
-            }
+            (err) => { alert('위치 정보를 가져올 수 없습니다.\\n에러: ' + err.message); },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
     }
 
-    // ── Utils ──
     function escapeHtml(str) {
         if (!str) return '';
         return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
-
     function escapeRegex(str) {
         return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    // ── Start ──
     window.addEventListener('DOMContentLoaded', init);
 })();
