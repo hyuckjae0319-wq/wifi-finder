@@ -44,11 +44,11 @@
 
     --header-h: 60px;
     --filter-h: 52px;
-    --z-header: 100;
-    --z-filter: 90;
-    --z-panel: 200;
-    --z-modal: 300;
-    --z-loading: 400;
+    --z-header: 2000;
+    --z-filter: 1900;
+    --z-panel: 2500;
+    --z-modal: 3000;
+    --z-loading: 4000;
 }
 
 /* ── Reset & Base ── */
