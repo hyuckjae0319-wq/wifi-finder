@@ -20,7 +20,7 @@
 
     // ── 상수 ──
     const KOREA_BOUNDS = { south: 32.0, north: 39.0, west: 124.0, east: 132.0 };
-    const MIN_OSM_ZOOM = 14; // 이 줌 레벨 이상일 때만 OSM API 호출 (속도 향상을 위해 14로 상향)
+    const MIN_OSM_ZOOM = 8; // 사용자의 요청에 따라 줌 레벨을 8로 하향 (넓은 영역 탐색)
 
     // ── DOM 참조 ──
     const $loading = document.getElementById('loading-overlay');
