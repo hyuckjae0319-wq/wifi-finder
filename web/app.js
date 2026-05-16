@@ -313,22 +313,40 @@
 
         const zoom = map.getZoom();
         const bounds = map.getBounds();
+        const bNorth = bounds.getNorth();
+        const bSouth = bounds.getSouth();
+        let bWest = bounds.getWest();
+        let bEast = bounds.getEast();
+        
+        // Leaflet 뷰포트 정규화 (연속 스크롤 방지)
+        bWest = ((bWest + 180) % 360 + 360) % 360 - 180;
+        bEast = ((bEast + 180) % 360 + 360) % 360 - 180;
+        const crossesDateline = bWest > bEast;
         
         let targetData = [];
         
-        // 1. 한국 데이터 필터링
-        // 한국 데이터는 많기 때문에, 줌이 너무 낮으면(zoom<7) 필터링 없이 클러스터러에 맡김
-        // 줌이 7 이상이면 화면 안의 데이터만 필터링해서 성능 최적화
+        // 1. 한국 데이터 필터링 (고성능 숫자 비교 사용)
         let kData = koreaData;
         if (zoom >= 7) {
-            kData = kData.filter(d => bounds.contains([d.lt, d.ln]));
+            kData = kData.filter(d => {
+                if (d.lt < bSouth || d.lt > bNorth) return false;
+                if (crossesDateline) {
+                    return d.ln >= bWest || d.ln <= bEast;
+                }
+                return d.ln >= bWest && d.ln <= bEast;
+            });
         } else if (!isCenterInKorea(map.getCenter())) {
-            // 전세계 뷰에서 멀리 떨어져있을때 한국 데이터를 전부 렌더링하면 무거움
             kData = []; 
         }
 
-        // 2. OSM 데이터 필터링 (항상 화면 안의 데이터만)
-        let oData = osmData.filter(d => bounds.contains([d.lt, d.ln]));
+        // 2. 글로벌 데이터 필터링 (고성능 숫자 비교 사용)
+        let oData = osmData.filter(d => {
+            if (d.lt < bSouth || d.lt > bNorth) return false;
+            if (crossesDateline) {
+                return d.ln >= bWest || d.ln <= bEast;
+            }
+            return d.ln >= bWest && d.ln <= bEast;
+        });
 
         targetData = [...kData, ...oData];
 
@@ -383,7 +401,7 @@
 
     function debouncedRender() {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(handleViewportChange, 600); // 잦은 API 호출 방지를 위해 딜레이 증가
+        debounceTimer = setTimeout(handleViewportChange, 300); // 딜레이 단축 (상용 API라서 빠름)
     }
 
     // ── 상세 패널 ──
