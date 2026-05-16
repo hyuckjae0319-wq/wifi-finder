@@ -236,7 +236,8 @@
             }
 
             const qBbox = `${qSouth},${qWest.toFixed(5)},${qNorth},${qEast.toFixed(5)}`;
-            const query = `[out:json][timeout:25];nwr["internet_access"="wlan"]["internet_access:fee"="no"](${qBbox});out center;`;
+            // 쿼리 확장: fee=no 조건 제거 (해외에는 태그가 없는 경우가 많음), wifi=yes|free 조건 추가
+            const query = `[out:json][timeout:25];(nwr["internet_access"="wlan"](${qBbox});nwr["wifi"~"yes|free"](${qBbox}););out center;`;
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
             
             const res = await fetch(url);
