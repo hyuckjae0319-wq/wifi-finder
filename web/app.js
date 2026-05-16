@@ -223,13 +223,24 @@
         $apiLoading.classList.remove('api-loading-hidden');
 
         try {
-            // 여유 마진 추가
-            const qBbox = `${fetchBounds.south},${fetchBounds.west},${fetchBounds.north},${fetchBounds.east}`;
+            // Normalize longitude to -180 ~ 180 to prevent API 400 Bad Request
+            let qSouth = Math.max(-90, fetchBounds.south).toFixed(5);
+            let qNorth = Math.min(90, fetchBounds.north).toFixed(5);
+            let qWest = (((fetchBounds.west + 180) % 360) + 360) % 360 - 180;
+            let qEast = (((fetchBounds.east + 180) % 360) + 360) % 360 - 180;
+            
+            // Overpass doesn't like west > east (dateline crossing)
+            if (qWest > qEast) {
+                qWest = -180;
+                qEast = 180;
+            }
+
+            const qBbox = `${qSouth},${qWest.toFixed(5)},${qNorth},${qEast.toFixed(5)}`;
             const query = `[out:json][timeout:25];nwr["internet_access"="wlan"]["internet_access:fee"="no"](${qBbox});out center;`;
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
             
             const res = await fetch(url);
-            if (!res.ok) throw new Error("API Limit");
+            if (!res.ok) throw new Error("API Limit or Bad Request: " + res.status);
             const data = await res.json();
             
             if (data && data.elements) {
