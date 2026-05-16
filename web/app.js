@@ -20,7 +20,7 @@
 
     // ── 상수 ──
     const KOREA_BOUNDS = { south: 32.0, north: 39.0, west: 124.0, east: 132.0 };
-    const MIN_OSM_ZOOM = 13; // 이 줌 레벨 이상일 때만 OSM API 호출
+    const MIN_OSM_ZOOM = 14; // 이 줌 레벨 이상일 때만 OSM API 호출 (속도 향상을 위해 14로 상향)
 
     // ── DOM 참조 ──
     const $loading = document.getElementById('loading-overlay');
@@ -364,7 +364,7 @@
 
     function debouncedRender() {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(handleViewportChange, 300);
+        debounceTimer = setTimeout(handleViewportChange, 600); // 잦은 API 호출 방지를 위해 딜레이 증가
     }
 
     // ── 상세 패널 ──
