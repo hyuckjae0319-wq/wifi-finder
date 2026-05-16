@@ -21,6 +21,9 @@
     // ── 상수 ──
     const KOREA_BOUNDS = { south: 32.0, north: 39.0, west: 124.0, east: 132.0 };
     const MIN_OSM_ZOOM = 8; // 사용자의 요청에 따라 줌 레벨을 8로 하향 (넓은 영역 탐색)
+    
+    // Geoapify API 설정
+    const GEOAPIFY_API_KEY = "2efb4007fb734af8831f86ba13fe80b2";
 
     // ── DOM 참조 ──
     const $loading = document.getElementById('loading-overlay');
@@ -235,28 +238,43 @@
                 qEast = 180;
             }
 
-            const qBbox = `${qSouth},${qWest.toFixed(5)},${qNorth},${qEast.toFixed(5)}`;
-            // 쿼리 확장: fee=no 조건 제거, 명시적인 wifi=yes 및 wifi=free 조건 추가 (regex 오류 방지)
-            const query = `[out:json][timeout:25];(nwr["internet_access"="wlan"](${qBbox});nwr["wifi"="yes"](${qBbox});nwr["wifi"="free"](${qBbox}););out center;`;
-            const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+            // Geoapify Places API 호출
+            // filter=rect:lon1,lat1,lon2,lat2 (west,south,east,north)
+            const rectFilter = `${qWest.toFixed(5)},${qSouth},${qEast.toFixed(5)},${qNorth}`;
+            const url = `https://api.geoapify.com/v2/places?categories=internet_access&filter=rect:${rectFilter}&limit=500&apiKey=${GEOAPIFY_API_KEY}`;
             
             const res = await fetch(url);
             if (!res.ok) throw new Error("API Limit or Bad Request: " + res.status);
             const data = await res.json();
             
-            if (data && data.elements) {
-                const newData = data.elements.map(el => {
-                    const tags = el.tags || {};
+            if (data && data.features) {
+                const newData = data.features.map(feature => {
+                    const props = feature.properties;
+                    // place_id가 없으면 좌표 기반 고유키 생성
+                    const id = props.place_id || `geo_${props.lat}_${props.lon}`;
+                    const tags = {
+                        amenity: 'unknown',
+                        name: props.name,
+                        ssid: props.name || "Geoapify WiFi",
+                        'addr:street': props.formatted || "상세 주소 없음",
+                        categories: props.categories || []
+                    };
+                    
+                    const catStr = tags.categories.join(',');
+                    if (catStr.includes('cafe') || catStr.includes('restaurant')) tags.amenity = 'cafe';
+                    else if (catStr.includes('accommodation') || catStr.includes('hotel')) tags.tourism = 'hotel';
+                    else if (catStr.includes('public_transport') || catStr.includes('airport')) tags.amenity = 'airport';
+
                     return {
-                        id: el.id,
+                        id: id,
                         isKorea: false,
-                        lt: el.center ? el.center.lat : el.lat,
-                        ln: el.center ? el.center.lon : el.lon,
-                        n: tags.name || tags.operator || '(이름 없음)',
-                        s: tags.ssid || '',
-                        a: `${tags['addr:street'] || ''} ${tags['addr:housenumber'] || ''}`.trim(),
+                        lt: props.lat,
+                        ln: props.lon,
+                        n: tags.name || '(이름 없음)',
+                        s: '',
+                        a: tags['addr:street'],
                         f: mapOSMTagsToFacility(tags),
-                        d: `오픈스트리트맵 정보 (Node ${el.id})`
+                        d: `Geoapify Places API`
                     };
                 });
                 
@@ -266,7 +284,7 @@
                 osmData = [...osmData, ...uniqueNewData];
             }
         } catch (err) {
-            console.error("OSM API Fetch Error:", err);
+            console.error("Geoapify API Fetch Error:", err);
             // 에러 나면 캐시에서 지워서 다음번에 다시 시도하게 함
             // (실제 앱에서는 너무 잦은 시도를 막기 위해 로직이 더 필요할 수 있음)
         } finally {
